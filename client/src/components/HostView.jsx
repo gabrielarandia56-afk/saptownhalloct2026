@@ -45,6 +45,11 @@ export default function HostView({ roomCode, hostState, onLeave }) {
     socket.emit('update_settings', { totalRounds: rounds });
   };
 
+  const handleSpawnBots = () => {
+    soundFX.playClick();
+    socket.emit('host_spawn_bots', { count: 50 });
+  };
+
   const handleToggleApprove = (teamId) => {
     soundFX.playClick();
     socket.emit('host_toggle_approve_answer', { teamId });
@@ -175,18 +180,28 @@ export default function HostView({ roomCode, hostState, onLeave }) {
                 </div>
               </div>
 
-              <button
-                onClick={handleStartGame}
-                disabled={players.length < 2}
-                className={`px-8 py-4 rounded-2xl font-black text-lg flex items-center gap-3 shadow-xl transition-all transform active:scale-95 ${
-                  players.length >= 2
-                    ? 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 shadow-emerald-500/20 cursor-pointer'
-                    : 'bg-white/10 text-slate-500 cursor-not-allowed border border-white/5'
-                }`}
-              >
-                <Play className="w-5 h-5 fill-current" />
-                <span>Auto-Assign Teams & Start ({players.length} Players)</span>
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleSpawnBots}
+                  className="px-4 py-3 rounded-xl bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-500/50 text-xs font-bold transition-all flex items-center gap-2"
+                >
+                  <Users className="w-4 h-4" />
+                  <span>+ Spawn 50 Test Bots</span>
+                </button>
+
+                <button
+                  onClick={handleStartGame}
+                  disabled={players.length < 2}
+                  className={`px-8 py-4 rounded-2xl font-black text-lg flex items-center gap-3 shadow-xl transition-all transform active:scale-95 ${
+                    players.length >= 2
+                      ? 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 shadow-emerald-500/20 cursor-pointer'
+                      : 'bg-white/10 text-slate-500 cursor-not-allowed border border-white/5'
+                  }`}
+                >
+                  <Play className="w-5 h-5 fill-current" />
+                  <span>Auto-Assign Teams & Start ({players.length} Players)</span>
+                </button>
+              </div>
             </div>
           </div>
 

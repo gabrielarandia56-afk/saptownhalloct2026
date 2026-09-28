@@ -310,6 +310,42 @@ io.on("connection", (socket) => {
     syncRoom(code);
   });
 
+  // Host Bot Spawner for load testing
+  socket.on("host_spawn_bots", ({ count = 50 }) => {
+    if (!currentRoomCode || !isHost) return;
+    const room = rooms.get(currentRoomCode);
+    if (!room || room.phase !== "LOBBY") return;
+
+    const botNames = [
+      "Alex_SAP", "Beatrix_Fiori", "Carlos_ABAP", "Daria_Cloud", "Ethan_Hana",
+      "Fatima_DevOps", "George_Consulting", "Hannah_Hypercare", "Ian_Agile", "Julia_BAPI",
+      "Kevin_Cutover", "Liam_SuccessFactors", "Maya_Analytics", "Noah_Basis", "Olivia_Security",
+      "Peter_Integration", "Quinn_Data", "Rachel_Scrum", "Sam_PMO", "Tara_Enterprise",
+      "Uma_SupplyChain", "Victor_S4Hana", "Wendy_Finance", "Xavier_Solutions", "Yasmine_UI",
+      "Zack_Testing", "Aiden_Salesforce", "Bella_Ariba", "Caleb_Middleware", "Diana_Architecture",
+      "Eli_Platform", "Fiona_Release", "Gabe_Consultant", "Harper_Workflows", "Isaac_Schemas",
+      "Jasmine_Transformation", "Kai_API", "Luna_Config", "Milo_Reports", "Nora_Legacy",
+      "Oscar_Migration", "Penny_Sandbox", "Riley_Staging", "Stella_Production", "Tyler_Frontend",
+      "Uri_Backend", "Vera_Quality", "Will_Automation", "Xena_Pipelines", "Zoe_Innovations"
+    ];
+
+    const targetCount = Math.min(count, botNames.length);
+    for (let i = 0; i < targetCount; i++) {
+      const botId = `bot_${Date.now()}_${i}`;
+      room.players.set(botId, {
+        id: botId,
+        name: botNames[i],
+        teamId: null,
+        isLeader: false,
+        connected: true,
+        isBot: true,
+        draftAnswer: ""
+      });
+    }
+
+    syncRoom(currentRoomCode);
+  });
+
   // 2. Player joins room
   socket.on("join_room", ({ roomCode, playerName }, callback) => {
     const code = (roomCode || "").toUpperCase().trim();
@@ -399,6 +435,35 @@ io.on("connection", (socket) => {
 
     syncRoom(room.code);
 
+    // Auto-generate witty draft answers for bot players
+    const botSnippets = [
+      "Let's align our deliverables in the next sprint.",
+      "Blame it on the legacy custom Z-table.",
+      "It works completely fine on my local development sandbox.",
+      "The transport request is still waiting for senior sign-off.",
+      "Rebooting the server and praying for zero hypercare tickets.",
+      "According to the agile manifesto, we need more coffee.",
+      "Let's take this offline and circle back after the town hall.",
+      "The client requested 37 additional custom fields in standard Fiori.",
+      "Automated by AI before anyone noticed."
+    ];
+
+    for (const player of room.players.values()) {
+      if (player.isBot && player.teamId) {
+        const randomSnippet = botSnippets[Math.floor(Math.random() * botSnippets.length)];
+        player.draftAnswer = randomSnippet;
+        const team = room.teams.get(player.teamId);
+        if (team) {
+          team.draftAnswers.push({
+            id: `draft_${player.id}_${Date.now()}`,
+            authorId: player.id,
+            text: randomSnippet,
+            votes: []
+          });
+        }
+      }
+    }
+
     // 20-second individual input timer
     room.startTimer(
       20,
@@ -464,12 +529,36 @@ io.on("connection", (socket) => {
 
     syncRoom(room.code);
 
+    // Bots vote randomly on their team drafts
+    for (const team of room.teams.values()) {
+      if (team.draftAnswers.length > 0) {
+        team.memberIds.forEach(mid => {
+          const p = room.players.get(mid);
+          if (p && p.isBot) {
+            const randomDraft = team.draftAnswers[Math.floor(Math.random() * team.draftAnswers.length)];
+            randomDraft.votes.push(p.id);
+          }
+        });
+      }
+      const leader = room.players.get(team.leaderId);
+      if (leader && leader.isBot) {
+        team.ready = true;
+      }
+    }
+
     // 60-second team internal voting timer
     room.startTimer(
       60,
       (left) => io.to(room.code).emit("timer_tick", { timeLeft: left }),
       () => finalizeTeamSelectionsAndProceed(room)
     );
+
+    // If all teams ready (e.g. all bot leaders), proceed quickly
+    if (Array.from(room.teams.values()).every(t => t.ready)) {
+      setTimeout(() => {
+        finalizeTeamSelectionsAndProceed(room);
+      }, 1500);
+    }
   }
 
   // 7. Team member votes on their team's draft answers
@@ -605,6 +694,21 @@ io.on("connection", (socket) => {
     current[1].votes = [];
 
     syncRoom(room.code);
+
+    // Bots vote in arena matchups
+    for (const player of room.players.values()) {
+      if (player.isBot && player.connected) {
+        if (player.teamId !== current[0].teamId && player.teamId !== current[1].teamId) {
+          const pickA = Math.random() > 0.5;
+          if (pickA) {
+            current[0].votes.push(player.id);
+          } else {
+            current[1].votes.push(player.id);
+          }
+          room.playerVoted.add(player.id);
+        }
+      }
+    }
 
     // 10-second public voting timer
     room.startTimer(
