@@ -7,6 +7,18 @@ import confetti from 'canvas-confetti';
 export default function HostView({ roomCode, hostState, onLeave }) {
   const [totalRounds, setTotalRounds] = useState(3);
 
+  const phase = hostState?.phase;
+  const currentRound = hostState?.currentRound;
+  const totalRoundsState = hostState?.totalRounds;
+
+  React.useEffect(() => {
+    if (phase === 'GAME_OVER' || (phase === 'LEADERBOARD' && currentRound === totalRoundsState)) {
+      try {
+        confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+      } catch (e) {}
+    }
+  }, [phase, currentRound, totalRoundsState]);
+
   if (!hostState) {
     return (
       <div className="flex flex-col items-center justify-center p-12 text-center">
@@ -17,9 +29,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
   }
 
   const {
-    phase,
     timeLeft,
-    currentRound,
     roundPrompt,
     players,
     teams,
@@ -28,12 +38,6 @@ export default function HostView({ roomCode, hostState, onLeave }) {
     currentMatchupIndex,
     totalMatchups
   } = hostState;
-
-  if (phase === 'GAME_OVER' || (phase === 'LEADERBOARD' && currentRound === hostState.totalRounds)) {
-    try {
-      confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-    } catch (e) {}
-  }
 
   const handleStartGame = () => {
     soundFX.playClick();

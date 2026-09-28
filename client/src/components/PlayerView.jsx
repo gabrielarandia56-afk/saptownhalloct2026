@@ -22,21 +22,13 @@ export default function PlayerView({ roomCode, playerName, gameState, onLeave })
     };
   }, []);
 
-  if (!gameState) {
-    return (
-      <div className="flex flex-col items-center justify-center p-8 text-center text-slate-300">
-        <div className="w-10 h-10 border-4 border-sap-blue border-t-transparent rounded-full animate-spin mb-3"></div>
-        <p>Connecting to room {roomCode}...</p>
-      </div>
-    );
-  }
+  const phase = gameState?.phase;
+  const currentRound = gameState?.currentRound;
+  const matchupIndex = gameState?.currentMatchupIndex;
 
-  const { phase, timeLeft, roundPrompt, currentMatchup, currentRound, totalRounds, teams } = gameState;
-  const myTeam = teams?.find((t) => t.members.some((m) => m.name === playerName));
-  const isLeader = teamState?.isLeader;
-
-  // Reset local state across phases
+  // Reset local state across phases — ALWAYS called before any conditional return!
   useEffect(() => {
+    if (!gameState) return;
     if (phase === 'INDIVIDUAL_ANSWERING') {
       setDraftInput('');
       setDraftSubmitted(false);
@@ -54,7 +46,20 @@ export default function PlayerView({ roomCode, playerName, gameState, onLeave })
         confetti({ particleCount: 60, spread: 60, origin: { y: 0.7 } });
       } catch (e) {}
     }
-  }, [phase, currentRound, gameState.currentMatchupIndex]);
+  }, [phase, currentRound, matchupIndex, gameState]);
+
+  if (!gameState) {
+    return (
+      <div className="flex flex-col items-center justify-center p-8 text-center text-slate-300">
+        <div className="w-10 h-10 border-4 border-sap-blue border-t-transparent rounded-full animate-spin mb-3"></div>
+        <p>Connecting to room {roomCode}...</p>
+      </div>
+    );
+  }
+
+  const { timeLeft, roundPrompt, currentMatchup, totalRounds, teams } = gameState;
+  const myTeam = teams?.find((t) => t.members.some((m) => m.name === playerName));
+  const isLeader = teamState?.isLeader;
 
   // 1. Submit individual draft answer (20s)
   const handleSubmitDraft = (e) => {
