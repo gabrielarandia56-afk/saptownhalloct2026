@@ -4,6 +4,7 @@ const path = require("path");
 const { Server } = require("socket.io");
 const cors = require("cors");
 const { getRandomPrompts } = require("./prompts");
+const { getRandomTeamNames } = require("./teamNames");
 const { isProfane, cleanText } = require("./moderation");
 
 const app = express();
@@ -22,18 +23,11 @@ const io = new Server(server, {
   }
 });
 
-// Port configuration
 const PORT = process.env.PORT || 5000;
-
-/**
- * In-Memory Rooms State
- * Map<roomCode, RoomObject>
- */
 const rooms = new Map();
 
-// Helper to generate 4-character uppercase alphanumeric room code
 function generateRoomCode() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // Removed confusing letters like I, O, 0, 1
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
   do {
     code = "";
@@ -47,37 +41,111 @@ function generateRoomCode() {
 /**
  * Game Phases:
  * - 'LOBBY'
- * - 'ANSWERING' (Players submit answers)
- * - 'HOST_REVIEW' (Host reviews submitted answers, can remove/skip before voting)
- * - 'VOTING' (Players vote on pairs of answers)
- * - 'ROUND_RESULT' (Shows vote breakdown and point awards for current matchup/round)
- * - 'LEADERBOARD' (Intermediary or Final leaderboard)
- * - 'GAME_OVER'
+ * - 'INDIVIDUAL_ANSWERING' (20 seconds: players submit their idea for their team)
+ * - 'TEAM_VOTING' (60 seconds or until all team leaders press 'Team Ready': internal vote to pick team champion answer)
+ * - 'HOST_REVIEW' (Host reviews chosen team answers)
+ * - 'VOTING' (Main tournament: all teams/players vote between team answers side-by-side)
+ * - 'ROUND_RESULT' (Vote reveal & points awarded to winning teams)
+ * - 'LEADERBOARD' (Round standings)
+ * - 'GAME_OVER' (Final leaderboard with team names + member rosters)
  */
 
 class Room {
   constructor(code, hostSocketId) {
     this.code = code;
     this.hostSocketId = hostSocketId;
-    this.players = new Map(); // socketId -> { id, name, score, connected, answers: [] }
+    this.players = new Map(); // socketId -> { id, name, teamId, isLeader, connected, draftAnswer: "" }
+    this.teams = new Map(); // teamId -> { id, name, leaderId, memberIds: [], score: 0, ready: false, draftAnswers: [], selectedAnswer: null }
     this.phase = "LOBBY";
     this.totalRounds = 3;
     this.currentRound = 0;
     this.prompts = [];
-    this.timer = null;
     this.timeLeft = 0;
     this.timerInterval = null;
     
-    // Per round data
+    // Per round
     this.roundPrompt = "";
-    this.submissions = []; // array of { id, playerId, text, reported, approved, votes: [] }
-    this.matchups = []; // array of pairs to vote on [[ansA, ansB], ...]
+    this.matchups = []; // pairs of team answers [[teamAAns, teamBAns], ...]
     this.currentMatchupIndex = 0;
-    this.matchupVotes = {}; // answerId -> count
-    this.playerVoted = new Set(); // set of playerIds who voted in current matchup
+    this.playerVoted = new Set();
+  }
+
+  // Auto divide players into equal teams (prefer 6 to 8, but lower amount of teams the better)
+  formTeams() {
+    const playerList = Array.from(this.players.values()).filter(p => p.connected);
+    const count = playerList.length;
+    if (count < 2) return;
+
+    let numTeams = 2;
+    if (count >= 32) {
+      numTeams = 8;
+    } else if (count >= 24) {
+      numTeams = 6;
+    } else if (count >= 16) {
+      numTeams = 4;
+    } else if (count >= 8) {
+      numTeams = 3;
+    } else if (count >= 4) {
+      numTeams = 2;
+    } else {
+      numTeams = 2;
+    }
+
+    // Shuffled players
+    const shuffled = [...playerList].sort(() => 0.5 - Math.random());
+    const names = getRandomTeamNames(numTeams);
+
+    this.teams.clear();
+    for (let i = 0; i < numTeams; i++) {
+      const teamId = `team_${i + 1}`;
+      this.teams.set(teamId, {
+        id: teamId,
+        name: names[i] || `Team ${i + 1}`,
+        leaderId: null,
+        memberIds: [],
+        score: 0,
+        ready: false,
+        draftAnswers: [],
+        selectedAnswer: null
+      });
+    }
+
+    const teamIds = Array.from(this.teams.keys());
+    shuffled.forEach((p, idx) => {
+      const assignedTeamId = teamIds[idx % numTeams];
+      p.teamId = assignedTeamId;
+      p.isLeader = false;
+      const team = this.teams.get(assignedTeamId);
+      team.memberIds.push(p.id);
+    });
+
+    // Pick random leader for each team
+    for (const team of this.teams.values()) {
+      if (team.memberIds.length > 0) {
+        const randomLeader = team.memberIds[Math.floor(Math.random() * team.memberIds.length)];
+        team.leaderId = randomLeader;
+        const leaderPlayer = this.players.get(randomLeader);
+        if (leaderPlayer) leaderPlayer.isLeader = true;
+      }
+    }
   }
 
   getPublicState() {
+    const teamsArray = Array.from(this.teams.values()).map(t => ({
+      id: t.id,
+      name: t.name,
+      leaderId: t.leaderId,
+      leaderName: this.players.get(t.leaderId)?.name || "Leader",
+      score: t.score,
+      ready: t.ready,
+      members: t.memberIds.map(mid => ({
+        id: mid,
+        name: this.players.get(mid)?.name || "Member",
+        isLeader: mid === t.leaderId
+      })),
+      selectedAnswer: t.selectedAnswer
+    }));
+
     return {
       code: this.code,
       phase: this.phase,
@@ -85,17 +153,15 @@ class Room {
       currentRound: this.currentRound,
       timeLeft: this.timeLeft,
       roundPrompt: this.roundPrompt,
+      teams: teamsArray,
       players: Array.from(this.players.values()).map(p => ({
         id: p.id,
         name: p.name,
-        score: p.score,
+        teamId: p.teamId,
+        isLeader: p.isLeader,
         connected: p.connected,
-        hasAnswered: p.answers && p.answers.length >= 2
+        hasDrafted: Boolean(p.draftAnswer)
       })),
-      // For answering phase: counts only
-      submissionCount: this.submissions.length,
-      expectedSubmissions: this.players.size * 2,
-      // Current matchup for voting/results (anonymous during voting)
       currentMatchup: this.getCurrentMatchupPublic(),
       currentMatchupIndex: this.currentMatchupIndex,
       totalMatchups: this.matchups.length
@@ -105,35 +171,54 @@ class Room {
   getHostState() {
     return {
       ...this.getPublicState(),
-      // Host gets full review view of submissions
-      allSubmissions: this.submissions.map(s => ({
-        id: s.id,
-        playerId: s.playerId,
-        playerName: this.players.get(s.playerId)?.name || "Unknown",
-        text: s.text,
-        reported: s.reported,
-        approved: s.approved
+      allTeamAnswers: Array.from(this.teams.values())
+        .filter(t => t.selectedAnswer)
+        .map(t => ({
+          teamId: t.id,
+          teamName: t.name,
+          answerId: t.selectedAnswer.id,
+          text: t.selectedAnswer.text,
+          authorName: this.players.get(t.selectedAnswer.authorId)?.name || "Team Member",
+          approved: t.selectedAnswer.approved !== false
+        }))
+    };
+  }
+
+  // Get specific team view for team internal voting phase
+  getTeamStateForPlayer(socketId) {
+    const player = this.players.get(socketId);
+    if (!player || !player.teamId) return null;
+    const team = this.teams.get(player.teamId);
+    if (!team) return null;
+
+    return {
+      teamId: team.id,
+      teamName: team.name,
+      isLeader: player.isLeader,
+      ready: team.ready,
+      members: team.memberIds.map(mid => this.players.get(mid)?.name || "Member"),
+      draftAnswers: team.draftAnswers.map(d => ({
+        id: d.id,
+        text: d.text,
+        votes: d.votes.length,
+        hasVotedForThis: d.votes.includes(socketId)
       }))
     };
   }
 
   getCurrentMatchupPublic() {
-    if (this.phase !== "VOTING" && this.phase !== "ROUND_RESULT") {
-      return null;
-    }
+    if (this.phase !== "VOTING" && this.phase !== "ROUND_RESULT") return null;
     const current = this.matchups[this.currentMatchupIndex];
     if (!current) return null;
 
     const [ansA, ansB] = current;
     if (this.phase === "VOTING") {
-      // Completely anonymous during voting
       return {
         prompt: this.roundPrompt,
-        answerA: { id: ansA.id, text: ansA.text },
-        answerB: { id: ansB.id, text: ansB.text }
+        answerA: { id: ansA.id, text: ansA.text, teamName: "Option A" },
+        answerB: { id: ansB.id, text: ansB.text, teamName: "Option B" }
       };
     } else {
-      // Results reveal author and votes
       const votesA = ansA.votes || [];
       const votesB = ansB.votes || [];
       return {
@@ -141,14 +226,18 @@ class Room {
         answerA: {
           id: ansA.id,
           text: ansA.text,
-          authorName: this.players.get(ansA.playerId)?.name || "Player",
+          teamId: ansA.teamId,
+          teamName: this.teams.get(ansA.teamId)?.name || "Team A",
+          authorName: this.players.get(ansA.authorId)?.name || "Member",
           votes: votesA.length,
           voters: votesA.map(vid => this.players.get(vid)?.name || "Someone")
         },
         answerB: {
           id: ansB.id,
           text: ansB.text,
-          authorName: this.players.get(ansB.playerId)?.name || "Player",
+          teamId: ansB.teamId,
+          teamName: this.teams.get(ansB.teamId)?.name || "Team B",
+          authorName: this.players.get(ansB.authorId)?.name || "Member",
           votes: votesB.length,
           voters: votesB.map(vid => this.players.get(vid)?.name || "Someone")
         }
@@ -163,9 +252,7 @@ class Room {
 
     this.timerInterval = setInterval(() => {
       this.timeLeft -= 1;
-      if (this.timeLeft >= 0) {
-        if (onTick) onTick(this.timeLeft);
-      }
+      if (this.timeLeft >= 0 && onTick) onTick(this.timeLeft);
       if (this.timeLeft <= 0) {
         this.stopTimer();
         if (onComplete) onComplete();
@@ -181,12 +268,10 @@ class Room {
   }
 }
 
-// REST health endpoint
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", activeRooms: rooms.size });
 });
 
-// Fallback to index.html for Single-Page Application
 app.get("*", (req, res) => {
   res.sendFile(path.join(clientBuildPath, "index.html"), (err) => {
     if (err) res.status(200).send("Prompt Drop Server Online");
@@ -197,13 +282,18 @@ io.on("connection", (socket) => {
   let currentRoomCode = null;
   let isHost = false;
 
-  // Broadcast helper
   function syncRoom(code) {
     const room = rooms.get(code);
     if (!room) return;
     io.to(code).emit("room_state", room.getPublicState());
     if (room.hostSocketId) {
       io.to(room.hostSocketId).emit("host_state", room.getHostState());
+    }
+    // Emit private team state updates
+    for (const player of room.players.values()) {
+      if (player.connected) {
+        io.to(player.id).emit("team_state", room.getTeamStateForPlayer(player.id));
+      }
     }
   }
 
@@ -216,9 +306,7 @@ io.on("connection", (socket) => {
     currentRoomCode = code;
     isHost = true;
 
-    if (typeof callback === "function") {
-      callback({ success: true, roomCode: code });
-    }
+    if (typeof callback === "function") callback({ success: true, roomCode: code });
     syncRoom(code);
   });
 
@@ -228,44 +316,23 @@ io.on("connection", (socket) => {
     const room = rooms.get(code);
 
     if (!room) {
-      if (typeof callback === "function") {
-        callback({ success: false, message: "Room not found. Check the 4-letter code!" });
-      }
+      if (typeof callback === "function") callback({ success: false, message: "Room not found. Check the code!" });
       return;
     }
 
     const cleanName = (playerName || "").trim();
-    if (!cleanName) {
-      if (typeof callback === "function") {
-        callback({ success: false, message: "Please enter a valid display name." });
-      }
+    if (!cleanName || isProfane(cleanName)) {
+      if (typeof callback === "function") callback({ success: false, message: "Please enter a valid, SFW name." });
       return;
     }
 
-    if (isProfane(cleanName)) {
-      if (typeof callback === "function") {
-        callback({ success: false, message: "Please choose a professional, SFW name." });
-      }
-      return;
-    }
-
-    // Check duplicate name
-    for (const player of room.players.values()) {
-      if (player.name.toLowerCase() === cleanName.toLowerCase() && player.connected && player.id !== socket.id) {
-        if (typeof callback === "function") {
-          callback({ success: false, message: "Name already taken in this room. Please pick another." });
-        }
-        return;
-      }
-    }
-
-    // Add or reconnect player
     room.players.set(socket.id, {
       id: socket.id,
       name: cleanName,
-      score: 0,
+      teamId: null,
+      isLeader: false,
       connected: true,
-      answers: []
+      draftAnswer: ""
     });
 
     socket.join(code);
@@ -273,27 +340,19 @@ io.on("connection", (socket) => {
     isHost = false;
 
     if (typeof callback === "function") {
-      callback({
-        success: true,
-        roomCode: code,
-        playerId: socket.id,
-        playerName: cleanName
-      });
+      callback({ success: true, roomCode: code, playerId: socket.id, playerName: cleanName });
     }
 
     syncRoom(code);
   });
 
-  // 3. Host updates settings (e.g. total rounds)
+  // 3. Host updates settings
   socket.on("update_settings", ({ totalRounds }) => {
     if (!currentRoomCode || !isHost) return;
     const room = rooms.get(currentRoomCode);
     if (!room || room.phase !== "LOBBY") return;
-
-    if (totalRounds >= 1 && totalRounds <= 10) {
-      room.totalRounds = parseInt(totalRounds, 10);
-      syncRoom(currentRoomCode);
-    }
+    room.totalRounds = parseInt(totalRounds, 10) || 3;
+    syncRoom(currentRoomCode);
   });
 
   // 4. Host starts the game
@@ -307,6 +366,8 @@ io.on("connection", (socket) => {
       return;
     }
 
+    // Auto divide into teams & pick leaders
+    room.formTeams();
     room.prompts = getRandomPrompts(room.totalRounds);
     room.currentRound = 0;
     startNextRound(room);
@@ -315,185 +376,213 @@ io.on("connection", (socket) => {
   function startNextRound(room) {
     room.currentRound += 1;
     if (room.currentRound > room.totalRounds) {
-      // Game Over
       room.phase = "GAME_OVER";
       room.stopTimer();
       syncRoom(room.code);
       return;
     }
 
-    room.phase = "ANSWERING";
-    room.roundPrompt = room.prompts[room.currentRound - 1] || "What is the best part of today's town hall?";
-    room.submissions = [];
+    room.phase = "INDIVIDUAL_ANSWERING";
+    room.roundPrompt = room.prompts[room.currentRound - 1] || "The most memorable moment of this town hall…";
     room.matchups = [];
     room.currentMatchupIndex = 0;
-    
-    // Clear player round answers
+
+    // Reset team and player round drafts
     for (const player of room.players.values()) {
-      player.answers = [];
+      player.draftAnswer = "";
+    }
+    for (const team of room.teams.values()) {
+      team.ready = false;
+      team.draftAnswers = [];
+      team.selectedAnswer = null;
     }
 
     syncRoom(room.code);
 
-    // 30-second answering timer
+    // 20-second individual input timer
     room.startTimer(
-      30,
-      (left) => {
-        io.to(room.code).emit("timer_tick", { timeLeft: left });
-      },
-      () => {
-        // Time is up -> Host review phase
-        proceedToHostReview(room);
-      }
+      20,
+      (left) => io.to(room.code).emit("timer_tick", { timeLeft: left }),
+      () => proceedToTeamVoting(room)
     );
   }
 
-  // 5. Player submits answers (2 answers)
-  socket.on("submit_answers", ({ answers }, callback) => {
+  // 5. Individual player inputs their answer idea (20s phase)
+  socket.on("submit_draft_answer", ({ answer }, callback) => {
     if (!currentRoomCode) return;
     const room = rooms.get(currentRoomCode);
-    if (!room || room.phase !== "ANSWERING") return;
+    if (!room || room.phase !== "INDIVIDUAL_ANSWERING") return;
 
     const player = room.players.get(socket.id);
-    if (!player) return;
+    if (!player || !player.teamId) return;
 
-    const sanitizedAnswers = (answers || [])
-      .map(a => (a || "").trim())
-      .filter(a => a.length > 0);
-
-    if (sanitizedAnswers.length < 2) {
-      if (typeof callback === "function") {
-        callback({ success: false, message: "Please provide both answers!" });
-      }
+    const text = (answer || "").trim();
+    if (!text) {
+      if (typeof callback === "function") callback({ success: false, message: "Please type an answer" });
       return;
     }
 
-    // Check profanity
-    const cleaned1 = isProfane(sanitizedAnswers[0]) ? cleanText(sanitizedAnswers[0]) : sanitizedAnswers[0];
-    const cleaned2 = isProfane(sanitizedAnswers[1]) ? cleanText(sanitizedAnswers[1]) : sanitizedAnswers[1];
+    const cleaned = isProfane(text) ? cleanText(text) : text;
+    player.draftAnswer = cleaned;
 
-    player.answers = [cleaned1, cleaned2];
-
-    // Push into submissions list
-    room.submissions.push(
-      {
-        id: `${socket.id}_1_${Date.now()}`,
-        playerId: socket.id,
-        text: cleaned1,
-        reported: false,
-        approved: true,
-        votes: []
-      },
-      {
-        id: `${socket.id}_2_${Date.now()}`,
-        playerId: socket.id,
-        text: cleaned2,
-        reported: false,
-        approved: true,
-        votes: []
+    const team = room.teams.get(player.teamId);
+    if (team) {
+      // Add or update team draft list
+      const existing = team.draftAnswers.find(d => d.authorId === socket.id);
+      if (existing) {
+        existing.text = cleaned;
+      } else {
+        team.draftAnswers.push({
+          id: `draft_${socket.id}_${Date.now()}`,
+          authorId: socket.id,
+          text: cleaned,
+          votes: []
+        });
       }
-    );
+    }
 
-    if (typeof callback === "function") {
-      callback({ success: true });
+    if (typeof callback === "function") callback({ success: true });
+    syncRoom(room.code);
+  });
+
+  // 6. Transition to Team Voting Phase (60s timer)
+  function proceedToTeamVoting(room) {
+    room.stopTimer();
+    room.phase = "TEAM_VOTING";
+
+    // Ensure every team has at least one default answer if none submitted
+    for (const team of room.teams.values()) {
+      if (team.draftAnswers.length === 0) {
+        team.draftAnswers.push({
+          id: `draft_${team.id}_sys`,
+          authorId: team.leaderId || 'sys',
+          text: "Let's circle back offline and sync next quarter.",
+          votes: []
+        });
+      }
     }
 
     syncRoom(room.code);
 
-    // Check if all players have submitted
-    const allSubmitted = Array.from(room.players.values()).every(
-      p => !p.connected || (p.answers && p.answers.length >= 2)
+    // 60-second team internal voting timer
+    room.startTimer(
+      60,
+      (left) => io.to(room.code).emit("timer_tick", { timeLeft: left }),
+      () => finalizeTeamSelectionsAndProceed(room)
     );
+  }
 
-    if (allSubmitted && room.players.size > 0) {
+  // 7. Team member votes on their team's draft answers
+  socket.on("team_vote_draft", ({ draftId }) => {
+    if (!currentRoomCode) return;
+    const room = rooms.get(currentRoomCode);
+    if (!room || room.phase !== "TEAM_VOTING") return;
+
+    const player = room.players.get(socket.id);
+    if (!player || !player.teamId) return;
+
+    const team = room.teams.get(player.teamId);
+    if (!team) return;
+
+    // Clear previous vote by this player in this team
+    for (const draft of team.draftAnswers) {
+      draft.votes = draft.votes.filter(vid => vid !== socket.id);
+    }
+
+    const selectedDraft = team.draftAnswers.find(d => d.id === draftId);
+    if (selectedDraft) {
+      selectedDraft.votes.push(socket.id);
+    }
+
+    syncRoom(room.code);
+  });
+
+  // 8. Team Leader presses "Team Ready"
+  socket.on("team_leader_ready", () => {
+    if (!currentRoomCode) return;
+    const room = rooms.get(currentRoomCode);
+    if (!room || room.phase !== "TEAM_VOTING") return;
+
+    const player = room.players.get(socket.id);
+    if (!player || !player.isLeader || !player.teamId) return;
+
+    const team = room.teams.get(player.teamId);
+    if (!team) return;
+
+    team.ready = true;
+    syncRoom(room.code);
+
+    // If all teams are ready, immediately proceed!
+    const allTeamsReady = Array.from(room.teams.values()).every(t => t.ready);
+    if (allTeamsReady) {
       room.stopTimer();
-      proceedToHostReview(room);
+      finalizeTeamSelectionsAndProceed(room);
     }
   });
 
-  function proceedToHostReview(room) {
+  function finalizeTeamSelectionsAndProceed(room) {
     room.stopTimer();
+
+    // Select the answer with highest votes for each team (or first if tie)
+    for (const team of room.teams.values()) {
+      const sorted = [...team.draftAnswers].sort((a, b) => b.votes.length - a.votes.length);
+      const chosen = sorted[0] || { id: `sys_${team.id}`, authorId: 'sys', text: "Deliver high business value." };
+      team.selectedAnswer = {
+        id: chosen.id,
+        teamId: team.id,
+        authorId: chosen.authorId,
+        text: chosen.text,
+        approved: true,
+        votes: []
+      };
+    }
+
     room.phase = "HOST_REVIEW";
     syncRoom(room.code);
   }
 
-  // 6. Host Moderation Controls
-  socket.on("host_toggle_approve_answer", ({ answerId }) => {
+  // 9. Host Moderation & Launch Public Voting
+  socket.on("host_toggle_approve_answer", ({ teamId }) => {
     if (!currentRoomCode || !isHost) return;
     const room = rooms.get(currentRoomCode);
     if (!room) return;
 
-    const sub = room.submissions.find(s => s.id === answerId);
-    if (sub) {
-      sub.approved = !sub.approved;
+    const team = room.teams.get(teamId);
+    if (team && team.selectedAnswer) {
+      team.selectedAnswer.approved = !team.selectedAnswer.approved;
       syncRoom(room.code);
     }
   });
 
-  socket.on("host_remove_answer", ({ answerId }) => {
-    if (!currentRoomCode || !isHost) return;
-    const room = rooms.get(currentRoomCode);
-    if (!room) return;
-
-    room.submissions = room.submissions.filter(s => s.id !== answerId);
-    syncRoom(room.code);
-  });
-
-  socket.on("host_skip_prompt", () => {
-    if (!currentRoomCode || !isHost) return;
-    const room = rooms.get(currentRoomCode);
-    if (!room) return;
-
-    const [newPrompt] = getRandomPrompts(1);
-    room.roundPrompt = newPrompt;
-    room.submissions = [];
-    for (const player of room.players.values()) {
-      player.answers = [];
-    }
-    room.phase = "ANSWERING";
-    syncRoom(room.code);
-
-    room.startTimer(
-      30,
-      (left) => {
-        io.to(room.code).emit("timer_tick", { timeLeft: left });
-      },
-      () => {
-        proceedToHostReview(room);
-      }
-    );
-  });
-
-  // 7. Host starts Voting Phase
   socket.on("host_start_voting", () => {
     if (!currentRoomCode || !isHost) return;
     const room = rooms.get(currentRoomCode);
     if (!room || room.phase !== "HOST_REVIEW") return;
 
-    // Filter approved submissions only
-    const approvedSubs = room.submissions.filter(s => s.approved);
+    const approvedTeamAnswers = Array.from(room.teams.values())
+      .filter(t => t.selectedAnswer && t.selectedAnswer.approved)
+      .map(t => t.selectedAnswer);
 
-    if (approvedSubs.length < 2) {
-      // If not enough answers, add fallback hilarious corporate placeholder so game never breaks
-      approvedSubs.push(
-        { id: `sys_1_${Date.now()}`, playerId: 'sys', text: "It's on my to-do list for Q4.", reported: false, approved: true, votes: [] },
-        { id: `sys_2_${Date.now()}`, playerId: 'sys', text: "Let's circle back on this offline.", reported: false, approved: true, votes: [] }
-      );
+    if (approvedTeamAnswers.length < 2) {
+      approvedTeamAnswers.push({
+        id: `sys_bot_${Date.now()}`,
+        teamId: 'sys',
+        authorId: 'sys',
+        text: "Synergy and cloud transformation.",
+        votes: []
+      });
     }
 
-    // Shuffle submissions
-    const shuffled = [...approvedSubs].sort(() => 0.5 - Math.random());
+    const shuffled = [...approvedTeamAnswers].sort(() => 0.5 - Math.random());
     room.matchups = [];
 
-    // Pair answers side-by-side
     for (let i = 0; i < shuffled.length; i += 2) {
       if (i + 1 < shuffled.length) {
         room.matchups.push([shuffled[i], shuffled[i + 1]]);
       } else {
-        // Odd number: pair with first submission or a witty bot answer
         room.matchups.push([
           shuffled[i],
-          { id: `sys_extra_${Date.now()}`, playerId: 'sys', text: "Synergy and align with strategic initiatives.", reported: false, approved: true, votes: [] }
+          { id: `sys_extra_${Date.now()}`, teamId: 'sys', authorId: 'sys', text: "Per my previous email.", votes: [] }
         ]);
       }
     }
@@ -504,7 +593,6 @@ io.on("connection", (socket) => {
 
   function startMatchup(room) {
     if (room.currentMatchupIndex >= room.matchups.length) {
-      // Round completed -> show leaderboard
       room.phase = "LEADERBOARD";
       syncRoom(room.code);
       return;
@@ -518,26 +606,20 @@ io.on("connection", (socket) => {
 
     syncRoom(room.code);
 
-    // 10-second voting timer
+    // 10-second public voting timer
     room.startTimer(
       10,
-      (left) => {
-        io.to(room.code).emit("timer_tick", { timeLeft: left });
-      },
-      () => {
-        // Voting done -> show round result
-        showMatchupResult(room);
-      }
+      (left) => io.to(room.code).emit("timer_tick", { timeLeft: left }),
+      () => showMatchupResult(room)
     );
   }
 
-  // 8. Player votes for answer
+  // 10. All players vote in the main matchup
   socket.on("vote_answer", ({ answerId }, callback) => {
     if (!currentRoomCode) return;
     const room = rooms.get(currentRoomCode);
     if (!room || room.phase !== "VOTING") return;
 
-    // Check if player already voted
     if (room.playerVoted.has(socket.id)) {
       if (typeof callback === "function") callback({ success: false, message: "Already voted!" });
       return;
@@ -545,16 +627,16 @@ io.on("connection", (socket) => {
 
     const current = room.matchups[room.currentMatchupIndex];
     if (!current) return;
-
     const [ansA, ansB] = current;
-    
-    // Players cannot vote for their own answer
-    if (ansA.id === answerId && ansA.playerId === socket.id) {
-      if (typeof callback === "function") callback({ success: false, message: "You cannot vote for your own answer!" });
+
+    const player = room.players.get(socket.id);
+    // Prevent voting for own team's answer
+    if (player && (ansA.teamId === player.teamId && ansA.id === answerId)) {
+      if (typeof callback === "function") callback({ success: false, message: "Cannot vote for your own team!" });
       return;
     }
-    if (ansB.id === answerId && ansB.playerId === socket.id) {
-      if (typeof callback === "function") callback({ success: false, message: "You cannot vote for your own answer!" });
+    if (player && (ansB.teamId === player.teamId && ansB.id === answerId)) {
+      if (typeof callback === "function") callback({ success: false, message: "Cannot vote for your own team!" });
       return;
     }
 
@@ -565,35 +647,20 @@ io.on("connection", (socket) => {
       ansB.votes.push(socket.id);
       room.playerVoted.add(socket.id);
     } else {
-      if (typeof callback === "function") callback({ success: false, message: "Invalid answer option." });
+      if (typeof callback === "function") callback({ success: false, message: "Invalid option" });
       return;
     }
 
     if (typeof callback === "function") callback({ success: true });
 
-    // If all eligible voters voted, immediately show results
-    const eligibleVoters = Array.from(room.players.values()).filter(
-      p => p.connected && p.id !== ansA.playerId && p.id !== ansB.playerId
-    );
+    // If all eligible voters voted, reveal results immediately
+    const eligibleCount = Array.from(room.players.values()).filter(
+      p => p.connected && p.teamId !== ansA.teamId && p.teamId !== ansB.teamId
+    ).length;
 
-    if (room.playerVoted.size >= eligibleVoters.length && eligibleVoters.length > 0) {
+    if (room.playerVoted.size >= eligibleCount && eligibleCount > 0) {
       room.stopTimer();
       showMatchupResult(room);
-    }
-  });
-
-  // 9. Report answer (Player SFW safeguard)
-  socket.on("report_answer", ({ answerId }) => {
-    if (!currentRoomCode) return;
-    const room = rooms.get(currentRoomCode);
-    if (!room) return;
-
-    const sub = room.submissions.find(s => s.id === answerId);
-    if (sub) {
-      sub.reported = true;
-      if (room.hostSocketId) {
-        io.to(room.hostSocketId).emit("answer_reported", { answerId, text: sub.text });
-      }
     }
   });
 
@@ -605,31 +672,29 @@ io.on("connection", (socket) => {
       const countA = ansA.votes.length;
       const countB = ansB.votes.length;
 
-      // Award points: 100 points per vote, +150 bonus for sweep (Quiplash style)
-      if (countA > 0 && ansA.playerId !== 'sys') {
-        const playerA = room.players.get(ansA.playerId);
-        if (playerA) {
-          playerA.score += countA * 100;
-          if (countB === 0 && countA >= 2) playerA.score += 150; // Clean sweep bonus
+      // Award team scores: 100 points per vote + 150 sweep bonus
+      if (countA > 0 && ansA.teamId !== 'sys') {
+        const teamA = room.teams.get(ansA.teamId);
+        if (teamA) {
+          teamA.score += countA * 100;
+          if (countB === 0 && countA >= 2) teamA.score += 150;
         }
       }
-      if (countB > 0 && ansB.playerId !== 'sys') {
-        const playerB = room.players.get(ansB.playerId);
-        if (playerB) {
-          playerB.score += countB * 100;
-          if (countA === 0 && countB >= 2) playerB.score += 150; // Clean sweep bonus
+      if (countB > 0 && ansB.teamId !== 'sys') {
+        const teamB = room.teams.get(ansB.teamId);
+        if (teamB) {
+          teamB.score += countB * 100;
+          if (countA === 0 && countB >= 2) teamB.score += 150;
         }
       }
     }
 
     syncRoom(room.code);
 
-    // 7 seconds result reveal before advancing
+    // 7 seconds result reveal
     room.startTimer(
       7,
-      (left) => {
-        io.to(room.code).emit("timer_tick", { timeLeft: left });
-      },
+      (left) => io.to(room.code).emit("timer_tick", { timeLeft: left }),
       () => {
         room.currentMatchupIndex += 1;
         startMatchup(room);
@@ -637,7 +702,7 @@ io.on("connection", (socket) => {
     );
   }
 
-  // 10. Host advances from Leaderboard to next round or end game
+  // 11. Host advances round or ends game
   socket.on("host_next_round", () => {
     if (!currentRoomCode || !isHost) return;
     const room = rooms.get(currentRoomCode);
@@ -651,12 +716,10 @@ io.on("connection", (socket) => {
     }
   });
 
-  // 11. Host resets or ends game
   socket.on("host_end_game", () => {
     if (!currentRoomCode || !isHost) return;
     const room = rooms.get(currentRoomCode);
     if (!room) return;
-
     room.phase = "GAME_OVER";
     room.stopTimer();
     syncRoom(room.code);
@@ -666,26 +729,20 @@ io.on("connection", (socket) => {
     if (!currentRoomCode || !isHost) return;
     const room = rooms.get(currentRoomCode);
     if (!room) return;
-
     room.phase = "LOBBY";
     room.currentRound = 0;
-    room.submissions = [];
-    room.matchups = [];
     room.stopTimer();
-    for (const player of room.players.values()) {
-      player.score = 0;
-      player.answers = [];
+    for (const team of room.teams.values()) {
+      team.score = 0;
     }
     syncRoom(room.code);
   });
 
-  // Disconnection handler
   socket.on("disconnect", () => {
     if (currentRoomCode) {
       const room = rooms.get(currentRoomCode);
       if (room) {
         if (isHost) {
-          // Host left
           io.to(currentRoomCode).emit("host_disconnected");
         } else {
           const player = room.players.get(socket.id);
@@ -701,7 +758,7 @@ io.on("connection", (socket) => {
 
 server.listen(PORT, () => {
   console.log(`===============================================`);
-  console.log(`🚀 Prompt Drop Server running on port ${PORT}`);
+  console.log(`🚀 Prompt Drop (Team Edition) running on port ${PORT}`);
   console.log(`🏢 Built for SAP Town Halls & Team Sessions`);
   console.log(`===============================================`);
 });

@@ -1,12 +1,11 @@
 import React, { useState } from 'react';
 import { socket } from '../App';
 import { soundFX } from '../utils/sound';
-import { Users, Play, Pause, SkipForward, CheckCircle2, XCircle, AlertTriangle, Trophy, RotateCcw, Shield, Eye, Flame } from 'lucide-react';
+import { Users, Play, SkipForward, CheckCircle2, XCircle, AlertTriangle, Trophy, RotateCcw, Shield, Eye, Flame, Crown, Clock } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 export default function HostView({ roomCode, hostState, onLeave }) {
   const [totalRounds, setTotalRounds] = useState(3);
-  const [showScores, setShowScores] = useState(true);
 
   if (!hostState) {
     return (
@@ -23,20 +22,16 @@ export default function HostView({ roomCode, hostState, onLeave }) {
     currentRound,
     roundPrompt,
     players,
-    allSubmissions,
+    teams,
+    allTeamAnswers,
     currentMatchup,
     currentMatchupIndex,
     totalMatchups
   } = hostState;
 
-  // Trigger confetti when game over or top winner revealed
   if (phase === 'GAME_OVER' || (phase === 'LEADERBOARD' && currentRound === hostState.totalRounds)) {
     try {
-      confetti({
-        particleCount: 100,
-        spread: 70,
-        origin: { y: 0.6 }
-      });
+      confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
     } catch (e) {}
   }
 
@@ -50,19 +45,9 @@ export default function HostView({ roomCode, hostState, onLeave }) {
     socket.emit('update_settings', { totalRounds: rounds });
   };
 
-  const handleToggleApprove = (answerId) => {
+  const handleToggleApprove = (teamId) => {
     soundFX.playClick();
-    socket.emit('host_toggle_approve_answer', { answerId });
-  };
-
-  const handleRemoveAnswer = (answerId) => {
-    soundFX.playClick();
-    socket.emit('host_remove_answer', { answerId });
-  };
-
-  const handleSkipPrompt = () => {
-    soundFX.playClick();
-    socket.emit('host_skip_prompt');
+    socket.emit('host_toggle_approve_answer', { teamId });
   };
 
   const handleStartVoting = () => {
@@ -76,7 +61,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
   };
 
   const handleEndGame = () => {
-    if (confirm('Are you sure you want to end the game early?')) {
+    if (confirm('End the game early?')) {
       soundFX.playClick();
       socket.emit('host_end_game');
     }
@@ -89,7 +74,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
 
   return (
     <div className="w-full flex flex-col gap-6 animate-pop-in">
-      {/* Host Control Header */}
+      {/* Host Header */}
       <div className="bg-slate-900/90 border border-white/10 rounded-2xl p-4 sm:p-6 backdrop-blur-md flex flex-wrap items-center justify-between gap-4 shadow-xl">
         <div className="flex items-center gap-4">
           <div className="bg-sap-blue/20 border border-sap-blue/40 px-4 py-2 rounded-xl flex flex-col items-center">
@@ -112,12 +97,11 @@ export default function HostView({ roomCode, hostState, onLeave }) {
           </div>
         </div>
 
-        {/* Global Timer Widget */}
         {timeLeft > 0 && phase !== 'LOBBY' && phase !== 'HOST_REVIEW' && (
           <div className="flex items-center gap-3 bg-white/5 border border-white/10 px-4 py-2 rounded-xl">
             <div className={`w-3 h-3 rounded-full ${timeLeft <= 5 ? 'bg-rose-500 animate-ping' : 'bg-amber-400 animate-pulse'}`} />
             <div className="flex flex-col">
-              <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Time Remaining</span>
+              <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Timer</span>
               <span className={`text-2xl font-black font-mono leading-none ${timeLeft <= 5 ? 'text-rose-400' : 'text-amber-400'}`}>
                 {timeLeft}s
               </span>
@@ -125,7 +109,6 @@ export default function HostView({ roomCode, hostState, onLeave }) {
           </div>
         )}
 
-        {/* Host Action Buttons */}
         <div className="flex items-center gap-2">
           {phase !== 'LOBBY' && phase !== 'GAME_OVER' && (
             <button
@@ -141,7 +124,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
             onClick={onLeave}
             className="px-3.5 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white text-xs font-medium border border-white/10 transition-all"
           >
-            Leave Room
+            Leave
           </button>
         </div>
       </div>
@@ -149,15 +132,14 @@ export default function HostView({ roomCode, hostState, onLeave }) {
       {/* PHASE 1: LOBBY */}
       {phase === 'LOBBY' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Main Join instructions */}
           <div className="lg:col-span-2 bg-slate-900/80 border border-white/10 rounded-3xl p-8 backdrop-blur-xl flex flex-col justify-between">
             <div>
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sap-blue/20 text-cyan-300 text-xs font-bold mb-4 border border-sap-blue/40">
                 <Users className="w-4 h-4" />
-                <span>Waiting for players to join...</span>
+                <span>Waiting for players...</span>
               </div>
-              <h2 className="text-3xl sm:text-5xl font-black text-white mb-4 leading-tight">
-                Join at your device using code:
+              <h2 className="text-3xl sm:text-5xl font-black text-white mb-2 leading-tight">
+                Join at your phone / laptop:
               </h2>
               <div className="my-6 inline-block bg-gradient-to-r from-sap-navy via-slate-800 to-sap-navy border-2 border-sap-blue p-6 rounded-3xl shadow-2xl">
                 <span className="font-mono text-5xl sm:text-7xl font-black text-white tracking-widest px-4">
@@ -165,12 +147,16 @@ export default function HostView({ roomCode, hostState, onLeave }) {
                 </span>
               </div>
 
-              <div className="space-y-2 text-slate-300 text-sm max-w-lg">
-                <p>💡 <span className="font-semibold text-white">How it works:</span> In each round, players write 2 witty answers to a corporate prompt. Then everyone votes on the best answers anonymously!</p>
+              <div className="bg-white/5 border border-white/10 p-4 rounded-2xl text-slate-300 text-xs space-y-1 max-w-lg">
+                <p className="font-bold text-cyan-300">⚡ Team Battle Edition:</p>
+                <p>• Players are auto-divided into balanced teams with funny SFW team names.</p>
+                <p>• A random <strong>Team Leader</strong> is assigned to each team.</p>
+                <p>• <strong>20s</strong>: Everyone drafts their own answer for their team.</p>
+                <p>• <strong>60s</strong>: Teams vote internally for their champion answer (or Leader clicks "Team Ready").</p>
+                <p>• Main Arena: All teams vote in head-to-head answer battles!</p>
               </div>
             </div>
 
-            {/* Host Round Selection & Start */}
             <div className="mt-8 pt-6 border-t border-white/10 flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-3">
                 <span className="text-xs uppercase font-bold text-slate-400">Total Rounds:</span>
@@ -180,9 +166,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
                       key={num}
                       onClick={() => handleUpdateRounds(num)}
                       className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-all ${
-                        totalRounds === num
-                          ? 'bg-sap-blue text-white shadow-md'
-                          : 'text-slate-400 hover:text-white'
+                        totalRounds === num ? 'bg-sap-blue text-white shadow-md' : 'text-slate-400 hover:text-white'
                       }`}
                     >
                       {num}
@@ -201,7 +185,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
                 }`}
               >
                 <Play className="w-5 h-5 fill-current" />
-                <span>Start Game ({players.length} Joined)</span>
+                <span>Auto-Assign Teams & Start ({players.length} Players)</span>
               </button>
             </div>
           </div>
@@ -211,95 +195,124 @@ export default function HostView({ roomCode, hostState, onLeave }) {
             <div className="flex items-center justify-between mb-4 pb-3 border-b border-white/10">
               <div className="flex items-center gap-2">
                 <Users className="w-5 h-5 text-sap-blue" />
-                <h3 className="font-bold text-white text-lg">Players Joined</h3>
+                <h3 className="font-bold text-white text-lg">Lobby ({players.length})</h3>
               </div>
-              <span className="px-2.5 py-0.5 rounded-full bg-sap-blue/20 text-cyan-300 font-bold text-xs border border-sap-blue/30">
-                {players.length}
-              </span>
             </div>
 
             <div className="flex-1 overflow-y-auto max-h-[360px] space-y-2 pr-1">
               {players.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-48 text-center text-slate-500 text-xs">
                   <Users className="w-8 h-8 mb-2 opacity-30" />
-                  <span>No players have joined yet.</span>
-                  <span>Share the code with your team!</span>
+                  <span>No players joined yet.</span>
                 </div>
               ) : (
                 players.map((p) => (
-                  <div
-                    key={p.id}
-                    className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/10 hover:border-sap-blue/40 transition-all"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-sap-blue to-cyan-400 flex items-center justify-center font-bold text-xs text-white">
-                        {p.name.charAt(0).toUpperCase()}
-                      </div>
-                      <span className="font-semibold text-sm text-slate-200">{p.name}</span>
-                    </div>
+                  <div key={p.id} className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/10">
+                    <span className="font-semibold text-sm text-slate-200">{p.name}</span>
                     <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
                   </div>
                 ))
               )}
             </div>
-            {players.length < 2 && (
-              <p className="mt-3 text-[11px] text-amber-400/90 text-center">
-                Need at least 2 players to start the town hall session.
-              </p>
-            )}
           </div>
         </div>
       )}
 
-      {/* PHASE 2: ANSWERING */}
-      {phase === 'ANSWERING' && (
-        <div className="bg-slate-900/80 border border-white/10 rounded-3xl p-8 sm:p-12 backdrop-blur-xl text-center shadow-2xl relative overflow-hidden">
-          <div className="max-w-3xl mx-auto space-y-6">
-            <span className="px-4 py-1.5 rounded-full bg-sap-blue/20 text-cyan-300 text-xs font-bold uppercase tracking-wider border border-sap-blue/40">
-              Round {currentRound} Prompt
-            </span>
+      {/* PHASE 2: INDIVIDUAL ANSWERING (20s) */}
+      {phase === 'INDIVIDUAL_ANSWERING' && (
+        <div className="bg-slate-900/80 border border-white/10 rounded-3xl p-8 sm:p-12 backdrop-blur-xl text-center shadow-2xl space-y-6">
+          <span className="px-4 py-1.5 rounded-full bg-sap-blue/20 text-cyan-300 text-xs font-bold uppercase tracking-wider border border-sap-blue/40">
+            Round {currentRound} Prompt • Individual Brainstorm (20s)
+          </span>
 
-            <h2 className="text-3xl sm:text-5xl font-extrabold text-white leading-tight">
-              "{roundPrompt}"
-            </h2>
+          <h2 className="text-3xl sm:text-5xl font-extrabold text-white leading-tight max-w-4xl mx-auto">
+            "{roundPrompt}"
+          </h2>
 
-            <div className="py-6">
-              <div className="inline-block bg-white/5 border border-white/10 px-8 py-4 rounded-2xl">
-                <span className="text-xs uppercase font-bold text-slate-400 block mb-1">Answers Collected</span>
-                <span className="text-3xl sm:text-4xl font-black text-amber-400 font-mono">
-                  {hostState.submissionCount} / {hostState.expectedSubmissions}
-                </span>
+          <div className="py-4">
+            <div className="inline-flex items-center gap-3 bg-white/5 border border-white/10 px-6 py-3 rounded-2xl">
+              <Clock className="w-5 h-5 text-amber-400 animate-spin" />
+              <span className="text-slate-300 text-sm font-semibold">
+                Every team member has 20s to type an idea on their phone!
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-4xl mx-auto pt-4">
+            {teams.map((t) => (
+              <div key={t.id} className="p-3 bg-white/5 border border-white/10 rounded-xl text-left">
+                <span className="text-xs font-bold text-cyan-300 block truncate">{t.name}</span>
+                <span className="text-[11px] text-slate-400">Leader: {t.leaderName}</span>
               </div>
-            </div>
-
-            <p className="text-slate-400 text-sm">
-              Players are currently writing their hilarious answers on their devices...
-            </p>
-
-            <div className="pt-4 flex items-center justify-center gap-4">
-              <button
-                onClick={handleSkipPrompt}
-                className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold border border-white/10 transition-all flex items-center gap-2"
-              >
-                <SkipForward className="w-4 h-4" />
-                <span>Skip this prompt</span>
-              </button>
-            </div>
+            ))}
           </div>
         </div>
       )}
 
-      {/* PHASE 3: HOST REVIEW & MODERATION */}
+      {/* PHASE 3: TEAM INTERNAL VOTING (60s) */}
+      {phase === 'TEAM_VOTING' && (
+        <div className="bg-slate-900/80 border border-white/10 rounded-3xl p-8 sm:p-10 backdrop-blur-xl text-center shadow-2xl space-y-6">
+          <span className="px-4 py-1.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold uppercase tracking-wider border border-amber-500/40">
+            Round {currentRound} • Team Voting & Huddle (60s)
+          </span>
+
+          <h2 className="text-2xl sm:text-3xl font-extrabold text-white">
+            "{roundPrompt}"
+          </h2>
+
+          <p className="text-slate-400 text-sm">
+            Teams are voting internally for their champion answer. Team Leaders can press <strong>"Team Ready"</strong> when chosen!
+          </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-5xl mx-auto pt-2">
+            {teams.map((t) => (
+              <div
+                key={t.id}
+                className={`p-4 rounded-2xl border transition-all text-left flex flex-col justify-between ${
+                  t.ready
+                    ? 'bg-emerald-950/30 border-emerald-500 shadow-lg shadow-emerald-500/20'
+                    : 'bg-white/5 border-white/10'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-extrabold text-white text-base">{t.name}</span>
+                    {t.ready ? (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-bold border border-emerald-500/40">
+                        ✓ Ready
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold animate-pulse">
+                        Voting...
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-slate-400 flex items-center gap-1 mb-2">
+                    <Crown className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Leader: {t.leaderName}</span>
+                  </div>
+                </div>
+
+                <div className="text-[11px] text-slate-400 pt-2 border-t border-white/10">
+                  {t.members.map((m) => m.name).join(', ')}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* PHASE 4: HOST REVIEW */}
       {phase === 'HOST_REVIEW' && (
         <div className="bg-slate-900/80 border border-white/10 rounded-3xl p-6 sm:p-8 backdrop-blur-xl shadow-2xl space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-white/10">
             <div>
               <div className="flex items-center gap-2">
                 <Shield className="w-5 h-5 text-emerald-400" />
-                <h3 className="text-xl font-bold text-white">Host Pre-Screening & Moderation</h3>
+                <h3 className="text-xl font-bold text-white">Host Review: Team Champion Answers</h3>
               </div>
               <p className="text-xs text-slate-400 mt-1">
-                Review submitted answers before opening the public voting round. You can uncheck or delete any inappropriate submissions.
+                Review the top answer chosen by each team before kicking off the arena tournament.
               </p>
             </div>
 
@@ -307,52 +320,36 @@ export default function HostView({ roomCode, hostState, onLeave }) {
               onClick={handleStartVoting}
               className="px-6 py-3 rounded-xl bg-gradient-to-r from-sap-blue to-sap-accent hover:from-blue-600 hover:to-blue-500 text-white font-bold text-sm shadow-lg shadow-sap-blue/20 transition-all flex items-center gap-2"
             >
-              <span>Launch Voting Round</span>
+              <span>Launch Arena Matchups</span>
               <span>→</span>
             </button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {allSubmissions && allSubmissions.map((sub, idx) => (
+            {allTeamAnswers && allTeamAnswers.map((ans) => (
               <div
-                key={sub.id || idx}
+                key={ans.teamId}
                 className={`p-4 rounded-2xl border transition-all flex flex-col justify-between ${
-                  sub.approved
-                    ? 'bg-white/5 border-white/10'
-                    : 'bg-rose-950/30 border-rose-500/40 opacity-75'
+                  ans.approved ? 'bg-white/5 border-white/10' : 'bg-rose-950/30 border-rose-500/40 opacity-75'
                 }`}
               >
-                <div className="mb-3">
+                <div>
                   <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-                    <span className="font-semibold text-slate-300">Author: {sub.playerName}</span>
-                    {sub.reported && (
-                      <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 text-[10px] font-bold border border-rose-500/40">
-                        Reported by player
-                      </span>
-                    )}
+                    <span className="font-bold text-cyan-300">{ans.teamName}</span>
+                    <span>Author: {ans.authorName}</span>
                   </div>
-                  <p className="text-base font-medium text-white italic">"{sub.text}"</p>
+                  <p className="text-lg font-bold text-white italic">"{ans.text}"</p>
                 </div>
 
-                <div className="pt-2 border-t border-white/10 flex items-center justify-between">
+                <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between">
                   <button
-                    onClick={() => handleToggleApprove(sub.id)}
+                    onClick={() => handleToggleApprove(ans.teamId)}
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                      sub.approved
-                        ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30'
-                        : 'bg-amber-500/20 text-amber-300 hover:bg-amber-500/30'
+                      ans.approved ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'
                     }`}
                   >
-                    {sub.approved ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    <span>{sub.approved ? 'Approved for Voting' : 'Include in Voting'}</span>
-                  </button>
-
-                  <button
-                    onClick={() => handleRemoveAnswer(sub.id)}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-all"
-                    title="Remove answer"
-                  >
-                    <XCircle className="w-4 h-4" />
+                    {ans.approved ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    <span>{ans.approved ? 'Approved' : 'Hidden'}</span>
                   </button>
                 </div>
               </div>
@@ -361,12 +358,12 @@ export default function HostView({ roomCode, hostState, onLeave }) {
         </div>
       )}
 
-      {/* PHASE 4: VOTING (Big Screen Projection) */}
+      {/* PHASE 5: ARENA VOTING */}
       {phase === 'VOTING' && currentMatchup && (
         <div className="bg-slate-900/80 border border-white/10 rounded-3xl p-6 sm:p-12 backdrop-blur-xl shadow-2xl text-center space-y-8">
           <div>
             <span className="text-xs font-bold uppercase tracking-widest text-slate-400">
-              Matchup {currentMatchupIndex + 1} of {totalMatchups}
+              Team Matchup {currentMatchupIndex + 1} of {totalMatchups}
             </span>
             <h2 className="text-2xl sm:text-4xl font-black text-white mt-2 max-w-3xl mx-auto">
               "{roundPrompt}"
@@ -374,16 +371,14 @@ export default function HostView({ roomCode, hostState, onLeave }) {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
-            {/* Card A */}
-            <div className="bg-gradient-to-br from-sap-blue/20 to-slate-900 border-2 border-sap-blue/50 p-6 sm:p-8 rounded-3xl shadow-xl flex flex-col justify-center items-center min-h-[180px] transform hover:scale-102 transition-all">
+            <div className="bg-gradient-to-br from-sap-blue/20 to-slate-900 border-2 border-sap-blue/50 p-6 sm:p-8 rounded-3xl shadow-xl flex flex-col justify-center items-center min-h-[180px]">
               <span className="text-xs uppercase font-extrabold tracking-widest text-cyan-300 mb-2">Option A</span>
               <p className="text-xl sm:text-2xl font-bold text-white text-center">
                 "{currentMatchup.answerA.text}"
               </p>
             </div>
 
-            {/* Card B */}
-            <div className="bg-gradient-to-br from-amber-500/20 to-slate-900 border-2 border-amber-500/50 p-6 sm:p-8 rounded-3xl shadow-xl flex flex-col justify-center items-center min-h-[180px] transform hover:scale-102 transition-all">
+            <div className="bg-gradient-to-br from-amber-500/20 to-slate-900 border-2 border-amber-500/50 p-6 sm:p-8 rounded-3xl shadow-xl flex flex-col justify-center items-center min-h-[180px]">
               <span className="text-xs uppercase font-extrabold tracking-widest text-amber-300 mb-2">Option B</span>
               <p className="text-xl sm:text-2xl font-bold text-white text-center">
                 "{currentMatchup.answerB.text}"
@@ -392,12 +387,12 @@ export default function HostView({ roomCode, hostState, onLeave }) {
           </div>
 
           <p className="text-sm font-semibold text-slate-400 animate-pulse">
-            Vote on your phone / laptop now!
+            Vote for your favorite team's answer on your screen now!
           </p>
         </div>
       )}
 
-      {/* PHASE 5: ROUND RESULT REVEAL */}
+      {/* PHASE 6: ROUND RESULT */}
       {phase === 'ROUND_RESULT' && currentMatchup && (
         <div className="bg-slate-900/80 border border-white/10 rounded-3xl p-6 sm:p-12 backdrop-blur-xl shadow-2xl text-center space-y-8 animate-pop-in">
           <div>
@@ -419,7 +414,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <span className="text-xs font-bold uppercase tracking-wider text-cyan-300">
-                    By {currentMatchup.answerA.authorName}
+                    {currentMatchup.answerA.teamName} (by {currentMatchup.answerA.authorName})
                   </span>
                   {currentMatchup.answerA.votes > currentMatchup.answerB.votes && (
                     <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/30 text-emerald-300 text-xs font-bold flex items-center gap-1">
@@ -433,9 +428,9 @@ export default function HostView({ roomCode, hostState, onLeave }) {
               </div>
 
               <div className="mt-6 pt-4 border-t border-white/10 flex items-center justify-between">
-                <span className="text-xs text-slate-400">Votes: {currentMatchup.answerA.voters?.join(', ') || 'None'}</span>
+                <span className="text-xs text-slate-400">Votes: {currentMatchup.answerA.votes}</span>
                 <span className="text-2xl font-black text-cyan-300 font-mono">
-                  {currentMatchup.answerA.votes} {currentMatchup.answerA.votes === 1 ? 'vote' : 'votes'}
+                  +{currentMatchup.answerA.votes * 100} pts
                 </span>
               </div>
             </div>
@@ -449,7 +444,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <span className="text-xs font-bold uppercase tracking-wider text-amber-300">
-                    By {currentMatchup.answerB.authorName}
+                    {currentMatchup.answerB.teamName} (by {currentMatchup.answerB.authorName})
                   </span>
                   {currentMatchup.answerB.votes > currentMatchup.answerA.votes && (
                     <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/30 text-emerald-300 text-xs font-bold flex items-center gap-1">
@@ -463,9 +458,9 @@ export default function HostView({ roomCode, hostState, onLeave }) {
               </div>
 
               <div className="mt-6 pt-4 border-t border-white/10 flex items-center justify-between">
-                <span className="text-xs text-slate-400">Votes: {currentMatchup.answerB.voters?.join(', ') || 'None'}</span>
+                <span className="text-xs text-slate-400">Votes: {currentMatchup.answerB.votes}</span>
                 <span className="text-2xl font-black text-amber-300 font-mono">
-                  {currentMatchup.answerB.votes} {currentMatchup.answerB.votes === 1 ? 'vote' : 'votes'}
+                  +{currentMatchup.answerB.votes * 100} pts
                 </span>
               </div>
             </div>
@@ -473,7 +468,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
         </div>
       )}
 
-      {/* PHASE 6 & 7: LEADERBOARD & GAME OVER */}
+      {/* PHASE 7: LEADERBOARD & GAME OVER */}
       {(phase === 'LEADERBOARD' || phase === 'GAME_OVER') && (
         <div className="bg-slate-900/80 border border-white/10 rounded-3xl p-6 sm:p-10 backdrop-blur-xl shadow-2xl space-y-8 animate-pop-in">
           <div className="text-center">
@@ -481,20 +476,20 @@ export default function HostView({ roomCode, hostState, onLeave }) {
               <Trophy className="w-8 h-8" />
             </div>
             <h2 className="text-3xl sm:text-5xl font-black text-white">
-              {phase === 'GAME_OVER' ? '🏆 Final Leaderboard' : `Round ${currentRound} Leaderboard`}
+              {phase === 'GAME_OVER' ? '🏆 Final Team Leaderboard' : `Round ${currentRound} Team Standings`}
             </h2>
             <p className="text-slate-400 text-sm mt-1">
-              Top corporate wits of the town hall!
+              Celebrating the champions of today's town hall!
             </p>
           </div>
 
-          <div className="max-w-2xl mx-auto space-y-3">
-            {[...players]
+          <div className="max-w-3xl mx-auto space-y-4">
+            {[...teams]
               .sort((a, b) => b.score - a.score)
-              .map((p, idx) => (
+              .map((t, idx) => (
                 <div
-                  key={p.id}
-                  className={`p-4 rounded-2xl flex items-center justify-between border transition-all ${
+                  key={t.id}
+                  className={`p-5 rounded-2xl border transition-all ${
                     idx === 0
                       ? 'bg-gradient-to-r from-amber-500/30 to-amber-600/10 border-amber-500 shadow-xl'
                       : idx === 1
@@ -504,28 +499,44 @@ export default function HostView({ roomCode, hostState, onLeave }) {
                       : 'bg-white/5 border-white/10'
                   }`}
                 >
-                  <div className="flex items-center gap-4">
-                    <span className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-sm ${
-                      idx === 0 ? 'bg-amber-400 text-slate-950' : 'bg-white/10 text-slate-300'
-                    }`}>
-                      #{idx + 1}
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-3">
+                      <span className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-sm ${
+                        idx === 0 ? 'bg-amber-400 text-slate-950' : 'bg-white/10 text-slate-300'
+                      }`}>
+                        #{idx + 1}
+                      </span>
+                      <span className="font-black text-xl text-white">{t.name}</span>
+                    </div>
+
+                    <span className="font-mono text-2xl font-black text-amber-400">
+                      {t.score} pts
                     </span>
-                    <span className="font-bold text-lg text-white">{p.name}</span>
                   </div>
 
-                  <span className="font-mono text-2xl font-black text-amber-400">
-                    {p.score} pts
-                  </span>
+                  {/* Team Members Roster */}
+                  <div className="pt-2 border-t border-white/10 flex flex-wrap items-center gap-2 text-xs">
+                    <span className="text-slate-400 font-semibold">Team Members:</span>
+                    {t.members.map((m) => (
+                      <span
+                        key={m.id}
+                        className={`px-2 py-0.5 rounded-md ${
+                          m.isLeader ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold' : 'bg-white/5 text-slate-300'
+                        }`}
+                      >
+                        {m.isLeader ? `👑 ${m.name}` : m.name}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               ))}
           </div>
 
-          {/* Action buttons */}
           <div className="pt-6 border-t border-white/10 flex justify-center gap-4">
             {phase === 'LEADERBOARD' && (
               <button
                 onClick={handleNextRound}
-                className="px-8 py-4 rounded-2xl bg-gradient-to-r from-sap-blue to-sap-accent hover:from-blue-600 hover:to-blue-500 text-white font-black text-lg shadow-xl shadow-sap-blue/20 transition-all transform active:scale-95 flex items-center gap-2"
+                className="px-8 py-4 rounded-2xl bg-gradient-to-r from-sap-blue to-sap-accent hover:from-blue-600 hover:to-blue-500 text-white font-black text-lg shadow-xl shadow-sap-blue/20 transition-all flex items-center gap-2"
               >
                 <span>Proceed to Round {currentRound + 1}</span>
                 <span>→</span>
@@ -535,7 +546,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
             {phase === 'GAME_OVER' && (
               <button
                 onClick={handlePlayAgain}
-                className="px-8 py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 text-slate-950 font-black text-lg shadow-xl shadow-emerald-500/20 transition-all transform active:scale-95 flex items-center gap-2"
+                className="px-8 py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 text-slate-950 font-black text-lg shadow-xl shadow-emerald-500/20 transition-all flex items-center gap-2"
               >
                 <RotateCcw className="w-5 h-5" />
                 <span>Play Again with Same Room</span>
