@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { socket } from '../App';
 import { soundFX } from '../utils/sound';
 import { Check, Send, ThumbsUp, AlertCircle, Trophy, Sparkles, Crown, Users, CheckCircle2 } from 'lucide-react';
+import CountdownTimer from './CountdownTimer';
 import confetti from 'canvas-confetti';
 
 export default function PlayerView({ roomCode, playerName, gameState, onLeave }) {
@@ -13,40 +14,36 @@ export default function PlayerView({ roomCode, playerName, gameState, onLeave })
   const [msg, setMsg] = useState('');
 
   useEffect(() => {
-    socket.on('team_state', (tState) => {
+    const handleTeamState = (tState) => {
       setTeamState(tState);
-    });
+    };
+
+    socket.on('team_state', handleTeamState);
 
     return () => {
-      socket.off('team_state');
+      socket.off('team_state', handleTeamState);
     };
   }, []);
 
-  const phase = gameState?.phase;
-  const currentRound = gameState?.currentRound;
-  const matchupIndex = gameState?.currentMatchupIndex;
-
-  // Reset local state across phases — ALWAYS called before any conditional return!
+  // Reset local state across phases - always called at top level
   useEffect(() => {
     if (!gameState) return;
-    if (phase === 'INDIVIDUAL_ANSWERING') {
+
+    if (gameState.phase === 'INDIVIDUAL_ANSWERING') {
       setDraftInput('');
       setDraftSubmitted(false);
       setSelectedDraftVote(null);
       setArenaVote(null);
-    }
-    if (phase === 'TEAM_VOTING') {
+    } else if (gameState.phase === 'TEAM_VOTING') {
       setSelectedDraftVote(null);
-    }
-    if (phase === 'VOTING') {
+    } else if (gameState.phase === 'VOTING') {
       setArenaVote(null);
-    }
-    if (phase === 'GAME_OVER') {
+    } else if (gameState.phase === 'GAME_OVER') {
       try {
         confetti({ particleCount: 60, spread: 60, origin: { y: 0.7 } });
       } catch (e) {}
     }
-  }, [phase, currentRound, matchupIndex, gameState]);
+  }, [gameState?.phase, gameState?.currentRound, gameState?.currentMatchupIndex]);
 
   if (!gameState) {
     return (
@@ -57,11 +54,11 @@ export default function PlayerView({ roomCode, playerName, gameState, onLeave })
     );
   }
 
-  const { timeLeft, roundPrompt, currentMatchup, totalRounds, teams } = gameState;
-  const myTeam = teams?.find((t) => t.members.some((m) => m.name === playerName));
+  const { phase, timeLeft, roundPrompt, currentMatchup, currentRound, totalRounds, teams = [] } = gameState;
+  const myTeam = teams?.find((t) => t.members?.some((m) => m.name === playerName));
   const isLeader = teamState?.isLeader;
 
-  // 1. Submit individual draft answer (20s)
+  // 1. Submit individual draft answer (1 min)
   const handleSubmitDraft = (e) => {
     e.preventDefault();
     if (!draftInput.trim()) {
@@ -130,12 +127,7 @@ export default function PlayerView({ roomCode, playerName, gameState, onLeave })
         </div>
 
         {timeLeft > 0 && phase !== 'LOBBY' && phase !== 'HOST_REVIEW' && (
-          <div className="flex items-center gap-2 bg-white/5 border border-white/10 px-3 py-1.5 rounded-xl">
-            <div className={`w-2.5 h-2.5 rounded-full ${timeLeft <= 5 ? 'bg-rose-500 animate-ping' : 'bg-amber-400 animate-pulse'}`} />
-            <span className={`text-xl font-black font-mono leading-none ${timeLeft <= 5 ? 'text-rose-400' : 'text-amber-400'}`}>
-              {timeLeft}s
-            </span>
-          </div>
+          <CountdownTimer timeLeft={timeLeft} />
         )}
       </div>
 
@@ -159,12 +151,12 @@ export default function PlayerView({ roomCode, playerName, gameState, onLeave })
         </div>
       )}
 
-      {/* 2. INDIVIDUAL ANSWERING (20s) */}
+      {/* 2. INDIVIDUAL ANSWERING (1 min) */}
       {phase === 'INDIVIDUAL_ANSWERING' && (
         <div className="bg-slate-900/80 border border-white/10 rounded-3xl p-6 sm:p-8 backdrop-blur-xl shadow-xl space-y-5">
           <div className="text-center">
             <span className="text-[11px] font-bold uppercase tracking-wider text-cyan-300 bg-sap-blue/20 px-3 py-1 rounded-full border border-sap-blue/30">
-              Round {currentRound} • Individual Input (20s)
+              Round {currentRound} • Team Answer Submission (1 Minute)
             </span>
             <h3 className="text-xl sm:text-2xl font-black text-white mt-3 leading-snug">
               "{roundPrompt}"
@@ -179,10 +171,10 @@ export default function PlayerView({ roomCode, playerName, gameState, onLeave })
                 </label>
                 <input
                   type="text"
-                  maxLength={90}
+                  maxLength={120}
                   value={draftInput}
                   onChange={(e) => setDraftInput(e.target.value)}
-                  placeholder="Type something clever..."
+                  placeholder="Type your witty answer here..."
                   autoFocus
                   className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-sap-blue focus:ring-2 focus:ring-sap-blue/20"
                 />
@@ -203,19 +195,19 @@ export default function PlayerView({ roomCode, playerName, gameState, onLeave })
               </div>
               <h4 className="text-lg font-bold text-white">Submitted to Team!</h4>
               <p className="text-xs text-slate-400">
-                Next, your team will vote internally on the best submission!
+                Waiting for the rest of your teammates to finish typing before team review...
               </p>
             </div>
           )}
         </div>
       )}
 
-      {/* 3. TEAM INTERNAL VOTING (60s) */}
+      {/* 3. TEAM INTERNAL VOTING (1 min) */}
       {phase === 'TEAM_VOTING' && (
         <div className="bg-slate-900/80 border border-white/10 rounded-3xl p-6 backdrop-blur-xl shadow-xl space-y-5">
           <div className="text-center">
             <span className="text-[11px] font-bold uppercase tracking-wider text-amber-300 bg-amber-500/20 px-3 py-1 rounded-full border border-amber-500/30">
-              {teamState?.teamName || 'Your Team'} • Pick Best Answer
+              {teamState?.teamName || 'Your Team'} • Team Review & Vote (1 Minute)
             </span>
             <p className="text-xs font-semibold text-slate-300 italic mt-2">
               "{roundPrompt}"
@@ -368,7 +360,7 @@ export default function PlayerView({ roomCode, playerName, gameState, onLeave })
           </div>
 
           <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
-            {[...teams]
+            {teams && [...teams]
               .sort((a, b) => b.score - a.score)
               .map((t, idx) => (
                 <div

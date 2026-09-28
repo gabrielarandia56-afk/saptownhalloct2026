@@ -465,9 +465,9 @@ io.on("connection", (socket) => {
       }
     }
 
-    // 20-second individual input timer
+    // 60-second (1 minute) individual input timer
     room.startTimer(
-      20,
+      60,
       (left) => io.to(room.code).emit("timer_tick", { timeLeft: left }),
       () => proceedToTeamVoting(room)
     );

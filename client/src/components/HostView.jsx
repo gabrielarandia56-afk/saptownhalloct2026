@@ -1,23 +1,12 @@
 import React, { useState } from 'react';
 import { socket } from '../App';
 import { soundFX } from '../utils/sound';
-import { Users, Play, SkipForward, CheckCircle2, XCircle, AlertTriangle, Trophy, RotateCcw, Shield, Eye, Flame, Crown, Clock } from 'lucide-react';
+import { Users, Play, SkipForward, CheckCircle2, XCircle, AlertTriangle, Trophy, RotateCcw, Shield, Eye, Flame, Crown } from 'lucide-react';
+import CountdownTimer from './CountdownTimer';
 import confetti from 'canvas-confetti';
 
 export default function HostView({ roomCode, hostState, onLeave }) {
   const [totalRounds, setTotalRounds] = useState(3);
-
-  const phase = hostState?.phase;
-  const currentRound = hostState?.currentRound;
-  const totalRoundsState = hostState?.totalRounds;
-
-  React.useEffect(() => {
-    if (phase === 'GAME_OVER' || (phase === 'LEADERBOARD' && currentRound === totalRoundsState)) {
-      try {
-        confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
-      } catch (e) {}
-    }
-  }, [phase, currentRound, totalRoundsState]);
 
   if (!hostState) {
     return (
@@ -29,15 +18,23 @@ export default function HostView({ roomCode, hostState, onLeave }) {
   }
 
   const {
+    phase,
     timeLeft,
+    currentRound,
     roundPrompt,
-    players,
-    teams,
-    allTeamAnswers,
+    players = [],
+    teams = [],
+    allTeamAnswers = [],
     currentMatchup,
     currentMatchupIndex,
     totalMatchups
   } = hostState;
+
+  if (phase === 'GAME_OVER' || (phase === 'LEADERBOARD' && currentRound === hostState.totalRounds)) {
+    try {
+      confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+    } catch (e) {}
+  }
 
   const handleStartGame = () => {
     soundFX.playClick();
@@ -95,7 +92,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
             <div className="flex items-center gap-2">
               <span className="text-sm font-semibold text-slate-300">Phase:</span>
               <span className="px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-white/10 text-cyan-300 border border-white/15">
-                {phase.replace('_', ' ')}
+                {phase ? phase.replace(/_/g, ' ') : ''}
               </span>
             </div>
             {phase !== 'LOBBY' && phase !== 'GAME_OVER' && (
@@ -107,15 +104,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
         </div>
 
         {timeLeft > 0 && phase !== 'LOBBY' && phase !== 'HOST_REVIEW' && (
-          <div className="flex items-center gap-3 bg-white/5 border border-white/10 px-4 py-2 rounded-xl">
-            <div className={`w-3 h-3 rounded-full ${timeLeft <= 5 ? 'bg-rose-500 animate-ping' : 'bg-amber-400 animate-pulse'}`} />
-            <div className="flex flex-col">
-              <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Timer</span>
-              <span className={`text-2xl font-black font-mono leading-none ${timeLeft <= 5 ? 'text-rose-400' : 'text-amber-400'}`}>
-                {timeLeft}s
-              </span>
-            </div>
-          </div>
+          <CountdownTimer timeLeft={timeLeft} size="lg" />
         )}
 
         <div className="flex items-center gap-2">
@@ -156,13 +145,13 @@ export default function HostView({ roomCode, hostState, onLeave }) {
                 </span>
               </div>
 
-              <div className="bg-white/5 border border-white/10 p-4 rounded-2xl text-slate-300 text-xs space-y-1 max-w-lg">
+              <div className="bg-white/5 border border-white/10 p-4 rounded-2xl text-slate-300 text-xs space-y-1.5 max-w-lg">
                 <p className="font-bold text-cyan-300">⚡ Team Battle Edition:</p>
-                <p>• Players are auto-divided into balanced teams with funny SFW team names.</p>
-                <p>• A random <strong>Team Leader</strong> is assigned to each team.</p>
-                <p>• <strong>20s</strong>: Everyone drafts their own answer for their team.</p>
-                <p>• <strong>60s</strong>: Teams vote internally for their champion answer (or Leader clicks "Team Ready").</p>
-                <p>• Main Arena: All teams vote in head-to-head answer battles!</p>
+                <p>• Players are auto-divided into balanced teams with witty SFW team names.</p>
+                <p>• A random <strong>Team Leader</strong> is assigned with a 👑 crown.</p>
+                <p>• <strong>1 Minute</strong>: Every member submits their witty answer idea for their team.</p>
+                <p>• <strong>1 Minute</strong>: Teams review and vote internally for their champion answer (or Leader clicks "Team Ready").</p>
+                <p>• Arena Tournament: All teams vote in head-to-head answer battles!</p>
               </div>
             </div>
 
@@ -237,11 +226,11 @@ export default function HostView({ roomCode, hostState, onLeave }) {
         </div>
       )}
 
-      {/* PHASE 2: INDIVIDUAL ANSWERING (20s) */}
+      {/* PHASE 2: INDIVIDUAL ANSWERING (1 min) */}
       {phase === 'INDIVIDUAL_ANSWERING' && (
         <div className="bg-slate-900/80 border border-white/10 rounded-3xl p-8 sm:p-12 backdrop-blur-xl text-center shadow-2xl space-y-6">
           <span className="px-4 py-1.5 rounded-full bg-sap-blue/20 text-cyan-300 text-xs font-bold uppercase tracking-wider border border-sap-blue/40">
-            Round {currentRound} Prompt • Individual Brainstorm (20s)
+            Round {currentRound} Prompt • Team Answer Submission (1 Minute)
           </span>
 
           <h2 className="text-3xl sm:text-5xl font-extrabold text-white leading-tight max-w-4xl mx-auto">
@@ -250,9 +239,9 @@ export default function HostView({ roomCode, hostState, onLeave }) {
 
           <div className="py-4">
             <div className="inline-flex items-center gap-3 bg-white/5 border border-white/10 px-6 py-3 rounded-2xl">
-              <Clock className="w-5 h-5 text-amber-400 animate-spin" />
+              <CountdownTimer timeLeft={timeLeft} />
               <span className="text-slate-300 text-sm font-semibold">
-                Every team member has 20s to type an idea on their phone!
+                Every team member has 1 minute to type an answer on their device!
               </span>
             </div>
           </div>
@@ -268,11 +257,11 @@ export default function HostView({ roomCode, hostState, onLeave }) {
         </div>
       )}
 
-      {/* PHASE 3: TEAM INTERNAL VOTING (60s) */}
+      {/* PHASE 3: TEAM INTERNAL VOTING (1 min) */}
       {phase === 'TEAM_VOTING' && (
         <div className="bg-slate-900/80 border border-white/10 rounded-3xl p-8 sm:p-10 backdrop-blur-xl text-center shadow-2xl space-y-6">
           <span className="px-4 py-1.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold uppercase tracking-wider border border-amber-500/40">
-            Round {currentRound} • Team Voting & Huddle (60s)
+            Round {currentRound} • Team Review & Voting (1 Minute)
           </span>
 
           <h2 className="text-2xl sm:text-3xl font-extrabold text-white">
@@ -280,7 +269,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
           </h2>
 
           <p className="text-slate-400 text-sm">
-            Teams are voting internally for their champion answer. Team Leaders can press <strong>"Team Ready"</strong> when chosen!
+            Teams are reviewing all ideas and voting internally for their champion answer. Team Leaders can press <strong>"Team Ready"</strong> when chosen!
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-5xl mx-auto pt-2">
@@ -313,7 +302,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
                 </div>
 
                 <div className="text-[11px] text-slate-400 pt-2 border-t border-white/10">
-                  {t.members.map((m) => m.name).join(', ')}
+                  {t.members?.map((m) => m.name).join(', ')}
                 </div>
               </div>
             ))}
@@ -503,7 +492,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
           </div>
 
           <div className="max-w-3xl mx-auto space-y-4">
-            {[...teams]
+            {teams && [...teams]
               .sort((a, b) => b.score - a.score)
               .map((t, idx) => (
                 <div
@@ -536,7 +525,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
                   {/* Team Members Roster */}
                   <div className="pt-2 border-t border-white/10 flex flex-wrap items-center gap-2 text-xs">
                     <span className="text-slate-400 font-semibold">Team Members:</span>
-                    {t.members.map((m) => (
+                    {t.members?.map((m) => (
                       <span
                         key={m.id}
                         className={`px-2 py-0.5 rounded-md ${
