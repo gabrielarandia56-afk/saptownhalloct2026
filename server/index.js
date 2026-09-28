@@ -311,10 +311,11 @@ io.on("connection", (socket) => {
   });
 
   // Host Bot Spawner for load testing
-  socket.on("host_spawn_bots", ({ count = 50 }) => {
-    if (!currentRoomCode || !isHost) return;
-    const room = rooms.get(currentRoomCode);
+  socket.on("host_spawn_bots", (data = {}) => {
+    const targetRoomCode = data.roomCode || currentRoomCode;
+    const room = rooms.get(targetRoomCode);
     if (!room || room.phase !== "LOBBY") return;
+    const count = data.count || 50;
 
     const botNames = [
       "Alex_SAP", "Beatrix_Fiori", "Carlos_ABAP", "Daria_Cloud", "Ethan_Hana",

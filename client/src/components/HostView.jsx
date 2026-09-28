@@ -47,7 +47,7 @@ export default function HostView({ roomCode, hostState, onLeave }) {
 
   const handleSpawnBots = () => {
     soundFX.playClick();
-    socket.emit('host_spawn_bots', { count: 50 });
+    socket.emit('host_spawn_bots', { roomCode, count: 50 });
   };
 
   const handleToggleApprove = (teamId) => {
